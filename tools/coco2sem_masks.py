@@ -49,44 +49,59 @@ def main():
 
     print(f"Starting conversion from {src_root} to {dst_root} (bg_val={bg_val})...")
 
-    # COCO Category ID to Grayscale Training ID mapping
-    # If bg_val is 0, we insert 'background' at index 0 and shift other classes by +1
-    if bg_val == 0:
-        class_map = {
-            1: 1, # cuttable
-            2: 2, # foliage
-            3: 3, # non-traversable
-            4: 4  # traversable
-        }
-        yaml_names = {
-            0: "background",
-            1: "cuttable",
-            2: "foliage",
-            3: "non-traversable",
-            4: "traversable"
-        }
-        pixel_counts = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 255: 0}
-    else:
-        class_map = {
-            1: 0, # cuttable
-            2: 1, # foliage
-            3: 2, # non-traversable
-            4: 3  # traversable
-        }
-        yaml_names = {
-            0: "cuttable",
-            1: "foliage",
-            2: "non-traversable",
-            3: "traversable"
-        }
-        pixel_counts = {0: 0, 1: 0, 2: 0, 3: 0, 255: 0}
-
-    # Split mapping: source folder name to target folder name
+    # 2. Discover categories dynamically across all splits
     split_map = {
         "train": "train",
         "valid": "val",
         "test": "test"
     }
+
+    coco_categories = {}
+    used_category_ids = set()
+
+    for src_split in split_map.keys():
+        ann_file = src_root / src_split / "_annotations.coco.json"
+        if ann_file.exists():
+            try:
+                with open(ann_file, "r") as f:
+                    coco_data = json.load(f)
+                
+                # Record categories
+                for c in coco_data.get("categories", []):
+                    coco_categories[c["id"]] = c["name"]
+                
+                # Record category IDs used in annotations
+                for ann in coco_data.get("annotations", []):
+                    used_category_ids.add(ann["category_id"])
+            except Exception as e:
+                print(f"Warning: Failed to read/parse {ann_file}: {e}")
+
+    # Sort used category IDs to ensure deterministic class mappings
+    sorted_used_ids = sorted(list(used_category_ids))
+    print(f"Discovered categories in COCO: {coco_categories}")
+    print(f"Category IDs used in annotations: {sorted_used_ids}")
+
+    if not sorted_used_ids:
+        print("Error: No annotations or categories found in the dataset.")
+        return
+
+    # Build COCO Category ID to Grayscale Training ID mapping
+    class_map = {}
+    yaml_names = {}
+
+    if bg_val == 0:
+        yaml_names[0] = "background"
+        for idx, cat_id in enumerate(sorted_used_ids):
+            class_map[cat_id] = idx + 1
+            yaml_names[idx + 1] = coco_categories.get(cat_id, f"class_{cat_id}")
+    else:
+        for idx, cat_id in enumerate(sorted_used_ids):
+            class_map[cat_id] = idx
+            yaml_names[idx] = coco_categories.get(cat_id, f"class_{cat_id}")
+
+    # Initialize pixel counts structure
+    pixel_counts = {k: 0 for k in yaml_names.keys()}
+    pixel_counts[255] = 0
 
     # Stat counters
     stats = {}
